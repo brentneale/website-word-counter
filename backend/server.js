@@ -5,16 +5,25 @@ const cors = require('cors');
 const { URL } = require('url');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: ['https://website-word-counter.vercel.app', 'http://localhost:3000'],
+    credentials: true
+}));
 app.use(express.json());
 
-const PAGE_LIMIT = 1000; // Set maximum pages to crawl
+const PAGE_LIMIT = 1000;
+const TIMEOUT = 60000; // Increased timeout to 60 seconds
 
 const isProductOrCollectionPage = (urlString) => {
-    const url = new URL(urlString);
-    const pathParts = url.pathname.toLowerCase().split('/').filter(part => part);
-    return (pathParts.includes('collections') && !pathParts.includes('products')) || 
-           pathParts.includes('products');
+    try {
+        const url = new URL(urlString);
+        const pathParts = url.pathname.toLowerCase().split('/').filter(part => part);
+        return (pathParts.includes('collections') && !pathParts.includes('products')) || 
+               pathParts.includes('products');
+    } catch (e) {
+        console.error('Error checking URL:', urlString, e.message);
+        return false;
+    }
 };
 
 const analyzeWebsite = async (baseUrl, productPagesOnly) => {
@@ -26,8 +35,9 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
     let wordFrequency = new Map();
     let pagesAnalyzed = 0;
     let totalPagesChecked = 0;
+    let errors = 0;
 
-    while (toVisit.length > 0 && totalPagesChecked < PAGE_LIMIT) {
+    while (toVisit.length > 0 && totalPagesChecked < PAGE_LIMIT && errors < 50) {
         const currentUrl = toVisit.pop();
         totalPagesChecked++;
         
@@ -41,35 +51,40 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
             console.log(`Fetching (${totalPagesChecked}/${PAGE_LIMIT}):`, currentUrl);
             const response = await axios.get(currentUrl, {
                 validateStatus: status => status >= 200 && status < 300,
-                timeout: 30000,
+                timeout: TIMEOUT,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                }
+                },
+                maxRedirects: 5
             });
 
             const $ = cheerio.load(response.data);
             
             if (!productPagesOnly || isProductOrCollectionPage(currentUrl)) {
+                // Remove unwanted elements
                 $('script').remove();
                 $('style').remove();
                 $('nav').remove();
                 $('header').remove();
                 $('footer').remove();
+                $('noscript').remove();
                 $('[style*="display: none"]').remove();
                 $('[style*="display:none"]').remove();
+                $('[style*="visibility: hidden"]').remove();
                 
                 const text = $('body').text();
                 const words = text.toLowerCase()
                     .replace(/[^a-z0-9\s]/g, ' ')
                     .split(/\s+/)
-                    .filter(word => word.length > 1);
+                    .filter(word => word.length > 1 && word.length < 30); // Filter out very long strings
                 
-                words.forEach(word => {
-                    wordFrequency.set(word, (wordFrequency.get(word) || 0) + 1);
-                });
-                
-                pagesAnalyzed++;
-                console.log(`Analyzed page ${pagesAnalyzed}: ${currentUrl}`);
+                if (words.length > 0) {
+                    words.forEach(word => {
+                        wordFrequency.set(word, (wordFrequency.get(word) || 0) + 1);
+                    });
+                    pagesAnalyzed++;
+                    console.log(`Successfully analyzed page ${pagesAnalyzed}: ${currentUrl}`);
+                }
             }
 
             if (totalPagesChecked < PAGE_LIMIT) {
@@ -87,7 +102,6 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
                             
                             if (!productPagesOnly || isProductOrCollectionPage(cleanUrl)) {
                                 toVisit.push(cleanUrl);
-                                console.log(`Added to queue: ${cleanUrl}`);
                             }
                         }
                     } catch (e) {
@@ -97,9 +111,14 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
             }
 
         } catch (error) {
+            errors++;
             console.error(`Error processing ${currentUrl}:`, error.message);
             continue;
         }
+    }
+
+    if (pagesAnalyzed === 0) {
+        throw new Error('No pages could be analyzed. Please check the URL and try again.');
     }
 
     console.log(`Analysis complete. Analyzed ${pagesAnalyzed} pages out of ${totalPagesChecked} checked`);
@@ -109,7 +128,6 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
     };
 };
 
-// Keep existing endpoints...
 app.post('/analyze-words', async (req, res) => {
     try {
         const { url, productPagesOnly } = req.body;
@@ -125,7 +143,7 @@ app.post('/analyze-words', async (req, res) => {
         res.json(result);
     } catch (error) {
         console.error('Analysis error:', error);
-        res.status(500).json({ error: 'Failed to analyze website' });
+        res.status(500).json({ error: error.message || 'Failed to analyze website' });
     }
 });
 
