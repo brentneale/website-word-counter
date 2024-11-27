@@ -2,10 +2,20 @@ const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const cors = require('cors');
+const { URL } = require('url');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const isProductOrCollectionPage = (urlString) => {
+    const url = new URL(urlString);
+    const pathParts = url.pathname.toLowerCase().split('/').filter(part => part);
+    
+    // Check if it's a collection or product page
+    return (pathParts.includes('collections') && !pathParts.includes('products')) || 
+           pathParts.includes('products');
+};
 
 const analyzeWebsite = async (baseUrl, productPagesOnly) => {
     console.log('Starting analysis for:', baseUrl);
@@ -37,7 +47,8 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
 
             const $ = cheerio.load(response.data);
             
-            if (!productPagesOnly || currentUrl.toLowerCase().includes('/product')) {
+            // Only analyze if it's not product-only mode OR if it is a product/collection page
+            if (!productPagesOnly || isProductOrCollectionPage(currentUrl)) {
                 $('script').remove();
                 $('style').remove();
                 $('nav').remove();
@@ -60,6 +71,7 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
                 console.log(`Analyzed page ${pagesAnalyzed}: ${currentUrl}`);
             }
 
+            // Find all links
             $('a').each((_, element) => {
                 let href = $(element).attr('href');
                 if (!href) return;
@@ -68,16 +80,20 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
                     const absoluteUrl = new URL(href, currentUrl);
                     const cleanUrl = absoluteUrl.toString().split('#')[0];
 
+                    // Check if it's an internal link we haven't visited
                     if (absoluteUrl.hostname === baseHostname && 
                         !visited.has(cleanUrl) && 
                         !toVisit.includes(cleanUrl)) {
                         
-                        if (!productPagesOnly || cleanUrl.toLowerCase().includes('/product')) {
+                        // If in product-only mode, only add product/collection pages
+                        if (!productPagesOnly || isProductOrCollectionPage(cleanUrl)) {
                             toVisit.push(cleanUrl);
+                            console.log(`Added to queue: ${cleanUrl}`);
                         }
                     }
                 } catch (e) {
                     // Skip invalid URLs
+                    console.error(`Invalid URL found: ${href}`);
                 }
             });
 
@@ -94,6 +110,7 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
     };
 };
 
+// Keep existing endpoints the same
 app.post('/analyze-words', async (req, res) => {
     try {
         const { url, productPagesOnly } = req.body;
