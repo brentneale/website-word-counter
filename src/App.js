@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 
+// Add deployment URL here
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+
 function App() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,7 +20,7 @@ function App() {
     setPagesAnalyzed(null);
     
     try {
-      const response = await fetch('http://localhost:3001/analyze-words', {
+      const response = await fetch(`${API_URL}/analyze-words`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -45,7 +48,7 @@ function App() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch('http://localhost:3001/generate-csv', {
+      const response = await fetch(`${API_URL}/generate-csv`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -60,13 +63,13 @@ function App() {
       }
 
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
+      a.href = downloadUrl;
       a.download = 'word-frequency.csv';
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
     } catch (err) {
       setError('Failed to download CSV file. Please try again.');
