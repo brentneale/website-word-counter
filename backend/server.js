@@ -8,11 +8,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const PAGE_LIMIT = 1000; // Set maximum pages to crawl
+
 const isProductOrCollectionPage = (urlString) => {
     const url = new URL(urlString);
     const pathParts = url.pathname.toLowerCase().split('/').filter(part => part);
-    
-    // Check if it's a collection or product page
     return (pathParts.includes('collections') && !pathParts.includes('products')) || 
            pathParts.includes('products');
 };
@@ -25,9 +25,11 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
     const baseHostname = parsedBase.hostname;
     let wordFrequency = new Map();
     let pagesAnalyzed = 0;
+    let totalPagesChecked = 0;
 
-    while (toVisit.length > 0) {
+    while (toVisit.length > 0 && totalPagesChecked < PAGE_LIMIT) {
         const currentUrl = toVisit.pop();
+        totalPagesChecked++;
         
         if (visited.has(currentUrl)) {
             continue;
@@ -36,7 +38,7 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
         visited.add(currentUrl);
 
         try {
-            console.log('Fetching:', currentUrl);
+            console.log(`Fetching (${totalPagesChecked}/${PAGE_LIMIT}):`, currentUrl);
             const response = await axios.get(currentUrl, {
                 validateStatus: status => status >= 200 && status < 300,
                 timeout: 30000,
@@ -47,7 +49,6 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
 
             const $ = cheerio.load(response.data);
             
-            // Only analyze if it's not product-only mode OR if it is a product/collection page
             if (!productPagesOnly || isProductOrCollectionPage(currentUrl)) {
                 $('script').remove();
                 $('style').remove();
@@ -71,31 +72,29 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
                 console.log(`Analyzed page ${pagesAnalyzed}: ${currentUrl}`);
             }
 
-            // Find all links
-            $('a').each((_, element) => {
-                let href = $(element).attr('href');
-                if (!href) return;
-                
-                try {
-                    const absoluteUrl = new URL(href, currentUrl);
-                    const cleanUrl = absoluteUrl.toString().split('#')[0];
+            if (totalPagesChecked < PAGE_LIMIT) {
+                $('a').each((_, element) => {
+                    let href = $(element).attr('href');
+                    if (!href) return;
+                    
+                    try {
+                        const absoluteUrl = new URL(href, currentUrl);
+                        const cleanUrl = absoluteUrl.toString().split('#')[0];
 
-                    // Check if it's an internal link we haven't visited
-                    if (absoluteUrl.hostname === baseHostname && 
-                        !visited.has(cleanUrl) && 
-                        !toVisit.includes(cleanUrl)) {
-                        
-                        // If in product-only mode, only add product/collection pages
-                        if (!productPagesOnly || isProductOrCollectionPage(cleanUrl)) {
-                            toVisit.push(cleanUrl);
-                            console.log(`Added to queue: ${cleanUrl}`);
+                        if (absoluteUrl.hostname === baseHostname && 
+                            !visited.has(cleanUrl) && 
+                            !toVisit.includes(cleanUrl)) {
+                            
+                            if (!productPagesOnly || isProductOrCollectionPage(cleanUrl)) {
+                                toVisit.push(cleanUrl);
+                                console.log(`Added to queue: ${cleanUrl}`);
+                            }
                         }
+                    } catch (e) {
+                        // Skip invalid URLs
                     }
-                } catch (e) {
-                    // Skip invalid URLs
-                    console.error(`Invalid URL found: ${href}`);
-                }
-            });
+                });
+            }
 
         } catch (error) {
             console.error(`Error processing ${currentUrl}:`, error.message);
@@ -103,14 +102,14 @@ const analyzeWebsite = async (baseUrl, productPagesOnly) => {
         }
     }
 
-    console.log(`Analysis complete. Analyzed ${pagesAnalyzed} pages`);
+    console.log(`Analysis complete. Analyzed ${pagesAnalyzed} pages out of ${totalPagesChecked} checked`);
     return {
         pagesAnalyzed,
         wordFrequency: Object.fromEntries(wordFrequency)
     };
 };
 
-// Keep existing endpoints the same
+// Keep existing endpoints...
 app.post('/analyze-words', async (req, res) => {
     try {
         const { url, productPagesOnly } = req.body;
